@@ -3,8 +3,7 @@
   "description": "Core utilities, enums, and helpers for TimeFrontiers packages",
   "type": "library",
   "license": "MIT",
-  "version": "1.0.0",
-  "keywords": ["php", "core", "utilities", "enums", "helpers"],
+  "keywords": ["php", "core", "utilities", "enums", "helpers", "phone"],
   "authors": [
     {
       "name": "TimeFrontiers",
@@ -14,7 +13,8 @@
   ],
   "require": {
     "php": ">=8.1",
-    "ext-curl": "*"
+    "ext-curl": "*",
+    "giggsey/libphonenumber-for-php": "^8.13"
   },
   "require-dev": {
     "phpunit/phpunit": "^10.0"

@@ -67,6 +67,61 @@ class Http {
   }
 
   /**
+   * Send a JSONP response (callback-wrapped JSON). Exits after sending.
+   *
+   * @throws \InvalidArgumentException When the callback name is unsafe.
+   */
+  public static function jsonp(
+    mixed $data,
+    string $callback,
+    HttpStatus $status = HttpStatus::OK,
+    int $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+  ):never {
+    if (!\preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $callback)) {
+      throw new \InvalidArgumentException('Invalid JSONP callback name');
+    }
+
+    $status->send();
+    \header('Content-Type: application/javascript; charset=utf-8');
+    echo $callback . '(' . \json_encode($data, $flags) . ');';
+    exit;
+  }
+
+  /**
+   * Build a standardized response array without sending it. Useful when you
+   * want to return a body from a controller, log it, or pass it through
+   * middleware before emitting.
+   *
+   * @return array{success: bool, message: string, data?: mixed, errors?: array, meta?: array}
+   */
+  public static function buildResponse(
+    bool $success,
+    string $message = '',
+    mixed $data = null,
+    array $errors = [],
+    array $meta = []
+  ):array {
+    $response = [
+      'success' => $success,
+      'message' => $message,
+    ];
+
+    if ($data !== null) {
+      $response['data'] = $data;
+    }
+
+    if (!empty($errors)) {
+      $response['errors'] = $errors;
+    }
+
+    if (!empty($meta)) {
+      $response['meta'] = $meta;
+    }
+
+    return $response;
+  }
+
+  /**
    * Get the client's IP address.
    */
   public static function clientIp():string {

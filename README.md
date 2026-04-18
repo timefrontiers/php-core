@@ -15,6 +15,7 @@ composer require timefrontiers/php-core
 
 - PHP 8.1+
 - ext-curl (for URL utilities)
+- `giggsey/libphonenumber-for-php` ^8.13 (for `Phone` utilities — installed automatically)
 
 ## Package Contents
 
@@ -30,8 +31,7 @@ composer require timefrontiers/php-core
 | `Url` | URL manipulation utilities |
 | `Str` | String utilities |
 | `Time` | Date/time utilities |
-| `Generic` | Legacy compatibility class |
-| `BetaTym` | Legacy compatibility class |
+| `Phone` | Phone number parsing, formatting, country/continent lookup |
 
 ---
 
@@ -162,6 +162,15 @@ Http::redirect('/login', HttpStatus::SEE_OTHER);
 Http::json(['user' => $user]);
 Http::success($data, 'User created');
 Http::error('Validation failed', HttpStatus::BAD_REQUEST, $errors);
+Http::jsonp($data, 'myCallback');              // JSONP (callback-wrapped JSON)
+
+// Build a response body without sending it (middleware / controller returns)
+$body = Http::buildResponse(
+  success: true,
+  message: 'User created',
+  data: $user,
+  meta: ['request_id' => $id]
+);
 
 // Request info
 $ip = Http::clientIp();
@@ -482,9 +491,16 @@ Str::endsWith('Hello World', 'World');         // true
 // Word count
 Str::wordCount('Hello World');                 // 2
 
-// Excerpt
-Str::excerpt('Long text with keyword here', 'keyword', 10);
+// Excerpt (strips HTML, normalizes whitespace, truncates at word boundary)
+Str::excerpt('<p>Long <b>article</b> text goes here...</p>', 30);
+// "Long article text goes here..."
+
+// Excerpt window around a phrase
+Str::excerptAround('Long text with keyword here', 'keyword', 10);
 // "...with keyword her..."
+
+// Chunk a string (e.g., split a code into groups)
+Str::chunk('1234567890', 3, '-');              // "123-456-789-0"
 
 // Pattern replacement
 Str::patternReplace(
@@ -493,124 +509,112 @@ Str::patternReplace(
   'Hello {{name}}, today is {{date}}'
 );
 // "Hello John, today is 2024-01-15"
-
-// Random string
-Str::random(16);                               // "aB3xKm9pQr2sT1uV"
 ```
+
+> Need random strings? Use `TimeFrontiers\Data\Random` from `timefrontiers/php-data`
+> — it's CSPRNG-backed with `alphanumeric`, `hex`, `base64`, `uuid`, `numeric`, and
+> more. `Str::random` no longer exists in php-core.
 
 ---
 
-## Legacy Compatibility
+## Phone Utilities
 
-For backward compatibility, legacy classes map old methods to new utilities:
-
-### Generic Class
+Static wrapper around `giggsey/libphonenumber-for-php` for parsing, validating,
+formatting, and geolocating phone numbers. Every method returns `null` (or
+`false` for `is*` checks) on failure — no exceptions thrown.
 
 ```php
-use TimeFrontiers\Generic;
-
-// These still work but are deprecated:
-Generic::redirect('/path');          // Use Http::redirect()
-Generic::setGet($url, $params);      // Use Url::withParams()
-Generic::allowedParam($keys, 'get'); // Use Request::only()
-Generic::splitEmailName($string);    // Use Str::parseEmailName()
-Generic::fileExt($filename);         // Use Str::fileExtension()
-Generic::urlExist($url);             // Use Url::exists()
-Generic::patternReplace(...);        // Use Str::patternReplace()
-Generic::isBase64($data);            // Use Str::isBase64()
-
-// Instance methods
-$generic = new Generic();
-$generic->requestParam(...);         // Use Request->validate()
-$generic->checkCSRF(...);            // Use Request->verifyCSRF()
+use TimeFrontiers\Phone;
 ```
 
-### BetaTym Class
+### Formatting
 
 ```php
-use TimeFrontiers\BetaTym;
+Phone::toE164('08031234567', 'NG');        // "+2348031234567"
+Phone::toIntl('+2348031234567');           // "+234 803 123 4567"
+Phone::toNational('+2348031234567');       // "0803 123 4567"
+Phone::toLocal('+2348031234567');          // alias of toNational()
+Phone::toRfc3966('+2348031234567');        // "tel:+234-803-123-4567"
 
-// These still work but are deprecated:
-BetaTym::now();           // Use Time::now()
-BetaTym::day($date);      // Use Time::day()
-BetaTym::month($date);    // Use Time::month()
-BetaTym::year($date);     // Use Time::year()
-BetaTym::MDY($date);      // Use Time::mdy()
-BetaTym::HMS($date);      // Use Time::hms()
-BetaTym::dateTym($date);  // Use Time::dateTym()
-BetaTym::seconds($date);  // Use Time::toTimestamp()
+// Generic formatter
+Phone::format('08031234567', Phone::FORMAT_E164, 'NG');
 ```
 
-### Legacy Constants
+### Country & continent lookup
 
 ```php
-HTTP_OK            // 200
-HTTP_CREATED       // 201
-HTTP_BAD_REQUEST   // 400
-HTTP_UNAUTHORIZED  // 401
-HTTP_FORBIDDEN     // 403
-HTTP_NOT_FOUND     // 404
-HTTP_INTERNAL_ERROR // 500
+Phone::country('+2348031234567');      // "NG"
+Phone::countryName('+2348031234567');  // "Nigeria"
+Phone::dialCode('+2348031234567');     // 234
+Phone::continent('+2348031234567');    // "Africa"
+
+// Skip the phone step if you already have the ISO code:
+Phone::continentFromCountry('JP');     // "Asia"
+Phone::continentFromCountry('BR');     // "South America"
 ```
 
----
+Supported continents: `Africa`, `Asia`, `Europe`, `North America`,
+`South America`, `Oceania`, `Antarctica`. The internal map covers all 249
+ISO 3166-1 alpha-2 codes.
 
-## Migration Guide
-
-### From Generic to New Classes
-
-| Old | New |
-|-----|-----|
-| `Generic::redirect($url)` | `Http::redirect($url)` |
-| `Generic::setGet($url, $params)` | `Url::withParams($url, $params)` |
-| `Generic::allowedParam($keys, 'post')` | `Request::fromPost()->only($keys)` |
-| `Generic::splitEmailName($str)` | `Str::parseEmailName($str)` |
-| `Generic::fileExt($file)` | `Str::fileExtension($file)` |
-| `Generic::urlExist($url)` | `Url::exists($url)` |
-| `Generic::isBase64($data)` | `Str::isBase64($data)` |
-| `$gen->requestParam(...)` | `$req->validate(...)` |
-| `$gen->checkCSRF(...)` | `$req->verifyCSRF(...)` |
-
-### From BetaTym to Time
-
-| Old | New |
-|-----|-----|
-| `BetaTym::now()` | `Time::now()` |
-| `BetaTym::day($d)` | `Time::day($d)` |
-| `BetaTym::month($d)` | `Time::month($d)` |
-| `BetaTym::year($d)` | `Time::year($d)` |
-| `BetaTym::MDY($d)` | `Time::mdy($d)` |
-| `BetaTym::HMS($d)` | `Time::hms($d)` |
-| `BetaTym::dateTym($d)` | `Time::dateTym($d)` |
-| `BetaTym::weekDay($d)` | `Time::weekday($d)` |
-| `BetaTym::seconds($d)` | `Time::toTimestamp($d)` |
-
-### From HTTP\Client to Http\Client
-
-| Old | New |
-|-----|-----|
-| `new Client(Client::GET, $url)` | `(new Client())->get($url)` |
-| `$client->body()` | `$response->body()` |
-| `$client->statusCode()` | `$response->statusCode()` |
-| `$client->setOpt('raw_param', 'json')` | `$client->postJson(...)` |
-
-### From HTTP\Header to Http\Header
-
-| Old | New |
-|-----|-----|
-| `Header::send(404)` | `Header::send(HttpStatus::NOT_FOUND)` |
-| `Header::notFound(true)` | `Header::notFound(redirect: true)` |
-| `Header::getSpecial()` | `Header::getCustom()` |
-
-### From Constants to Enum
+### Line type & carrier
 
 ```php
-// Old
-http_response_code(HTTP_NOT_FOUND);
+Phone::type('+2348031234567');         // "mobile"
+Phone::type('+442071838750');          // "landline"
+Phone::type('+18005551234');           // "toll_free"
 
-// New
-use TimeFrontiers\Http\HttpStatus;
-HttpStatus::NOT_FOUND->send();
+Phone::carrier('+2348031234567');      // "MTN" (mobile only)
+Phone::location('+2348031234567');     // "Nigeria" / "Lagos" (locale-dependent)
+Phone::timeZones('+2348031234567');    // ["Africa/Lagos"]
+```
+
+Possible `type()` values: `mobile`, `landline`, `fixed_or_mobile`, `toll_free`,
+`premium_rate`, `shared_cost`, `voip`, `personal_number`, `pager`, `uan`,
+`voicemail`, `unknown`.
+
+### Validation
+
+```php
+Phone::isValid('+2348031234567');          // true
+Phone::isValid('08031234567', 'NG');       // true
+Phone::isValid('12345');                   // false
+
+Phone::isPossible('+2348031234567');       // true — length-only check
+Phone::isRegion('+2348031234567', 'NG');   // true
+```
+
+### Structured parse
+
+One call returning everything at once — handy for logging or API responses:
+
+```php
+Phone::parse('08031234567', 'NG');
+// [
+//   'valid'        => true,
+//   'possible'     => true,
+//   'country'      => 'NG',
+//   'country_name' => 'Nigeria',
+//   'continent'    => 'Africa',
+//   'dial_code'    => 234,
+//   'national'     => '0803 123 4567',
+//   'e164'         => '+2348031234567',
+//   'intl'         => '+234 803 123 4567',
+//   'rfc3966'      => 'tel:+234-803-123-4567',
+//   'type'         => 'mobile',
+//   'carrier'      => 'MTN',
+//   'location'     => 'Nigeria',
+//   'time_zones'   => ['Africa/Lagos'],
+// ]
+```
+
+### Normalization
+
+Cheap, no libphonenumber needed — useful as a pre-store cleanup:
+
+```php
+Phone::normalize(' +234 (803) 123-4567 ');  // "+2348031234567"
+Phone::normalize('0803.123.4567');          // "08031234567"
 ```
 
 ---

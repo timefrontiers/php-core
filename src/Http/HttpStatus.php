@@ -7,7 +7,8 @@ namespace TimeFrontiers\Http;
 /**
  * HTTP status codes as an enum.
  *
- * Replaces legacy constants like HTTP_BAD_REQUEST, HTTP_UNAUTHORIZED, etc.
+ * Provides `send()`, `phrase()`, and category predicates for every
+ * standard status code (1xx–5xx).
  */
 enum HttpStatus: int {
 

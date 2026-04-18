@@ -301,7 +301,25 @@ class Str {
   }
 
   /**
-   * Extract an excerpt around a phrase.
+   * Generate an excerpt from text: strip HTML, normalize whitespace, truncate
+   * at a word boundary.
+   *
+   * @param string $text Full text (may contain HTML)
+   * @param int $length Maximum excerpt length
+   * @param string $suffix Suffix when truncated
+   * @return string Plain-text excerpt
+   */
+  public static function excerpt(string $text, int $length = 200, string $suffix = '...'):string {
+    $text = \strip_tags($text);
+    $text = \preg_replace('/\s+/', ' ', $text);
+    $text = \trim($text);
+
+    return self::truncateWords($text, $length, $suffix);
+  }
+
+  /**
+   * Extract an excerpt window around a search phrase (with ellipses on either
+   * side when the excerpt is a middle slice of the source).
    *
    * @param string $text Full text
    * @param string $phrase Phrase to find
@@ -309,7 +327,7 @@ class Str {
    * @param string $ellipsis Ellipsis string
    * @return string Excerpt
    */
-  public static function excerpt(
+  public static function excerptAround(
     string $text,
     string $phrase,
     int $radius = 100,
@@ -338,24 +356,13 @@ class Str {
   }
 
   /**
-   * Generate a random string.
-   *
-   * @param int $length String length
-   * @param string $chars Character set
-   * @return string Random string
+   * Split a string into fixed-size chunks joined by a separator
+   * (e.g., `"1234567890"` → `"123-456-789-0"`).
    */
-  public static function random(int $length = 16, string $chars = ''):string {
-    if (empty($chars)) {
-      $chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  public static function chunk(string $string, int $chunk_size = 3, string $separator = '-'):string {
+    if ($chunk_size < 1) {
+      return $string;
     }
-
-    $result = '';
-    $max = \strlen($chars) - 1;
-
-    for ($i = 0; $i < $length; $i++) {
-      $result .= $chars[\random_int(0, $max)];
-    }
-
-    return $result;
+    return \implode($separator, \str_split($string, $chunk_size));
   }
 }
