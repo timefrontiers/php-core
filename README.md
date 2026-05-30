@@ -348,11 +348,11 @@ Header::csp([
 
 // Custom headers
 Header::set('X-Custom', 'value');
-Header::setCustom('Request-Id', '123');  // X-Tym-Request-Id
+Header::setCustom('Request-Id', '123');  // X-TFr-Request-Id
 Header::poweredBy('TimeFrontiers');
 
-// Get custom X-Tym headers from response
-$custom = Header::getCustom();           // All X-Tym headers
+// Get custom X-TFr headers from response
+$custom = Header::getCustom();           // All X-TFr headers
 $value = Header::getCustom('Request-Id');
 ```
 
@@ -385,8 +385,8 @@ Time::mdy('2024-01-15');           // "January 15th, 2024"
 Time::hms('2024-01-15 14:30:00');  // "14:30:00"
 Time::hm('2024-01-15 14:30:00');   // "14:30"
 Time::hm('...', true);             // "2:30 PM" (12-hour)
-Time::dateTym('2024-01-15 14:30:00'); // "January 15th, 2024 at 14:30:00"
-Time::weekDateTym('2024-01-15');  // "Monday, 15th January 2024"
+Time::datetime('2024-01-15 14:30:00'); // "January 15th, 2024 at 14:30:00"
+Time::weekDatetime('2024-01-15');  // "Monday, 15th January 2024"
 
 // Relative time
 Time::relative('2024-01-14');     // "1 day ago"

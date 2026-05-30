@@ -22,7 +22,7 @@ class Header {
    * Send HTTP status header and exit.
    *
    * @param HttpStatus|int $status Status code or enum
-   * @param array $custom_headers Custom X-Tym headers to add
+   * @param array $custom_headers Custom X-TFr headers to add
    */
   public static function send(HttpStatus|int $status, array $custom_headers = []):never {
     self::sendCustomHeaders($custom_headers);
@@ -40,7 +40,7 @@ class Header {
    * Send HTTP status without exiting.
    *
    * @param HttpStatus|int $status Status code or enum
-   * @param array $custom_headers Custom X-Tym headers to add
+   * @param array $custom_headers Custom X-TFr headers to add
    */
   public static function sendSoft(HttpStatus|int $status, array $custom_headers = []):void {
     self::sendCustomHeaders($custom_headers);
@@ -61,7 +61,7 @@ class Header {
    *
    * @param string $url Destination URL
    * @param string $message Optional message (added as query param)
-   * @param array $custom_headers Custom X-Tym headers to add
+   * @param array $custom_headers Custom X-TFr headers to add
    */
   public static function redirect(string $url, string $message = '', array $custom_headers = []):never {
     if (!empty($message)) {
@@ -95,7 +95,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-Tym headers
+   * @param array $custom_headers Custom X-TFr headers
    */
   public static function badRequest(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::BAD_REQUEST, $redirect, $message, $custom_headers);
@@ -106,7 +106,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-Tym headers
+   * @param array $custom_headers Custom X-TFr headers
    */
   public static function unauthorized(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::UNAUTHORIZED, $redirect, $message, $custom_headers);
@@ -117,7 +117,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-Tym headers
+   * @param array $custom_headers Custom X-TFr headers
    */
   public static function forbidden(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::FORBIDDEN, $redirect, $message, $custom_headers);
@@ -128,7 +128,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-Tym headers
+   * @param array $custom_headers Custom X-TFr headers
    */
   public static function notFound(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::NOT_FOUND, $redirect, $message, $custom_headers);
@@ -139,7 +139,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-Tym headers
+   * @param array $custom_headers Custom X-TFr headers
    */
   public static function internalError(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::INTERNAL_SERVER_ERROR, $redirect, $message, $custom_headers);
@@ -246,25 +246,25 @@ class Header {
   }
 
   /**
-   * Set a custom X-Tym header.
+   * Set a custom X-TFr header.
    */
   public static function setCustom(string $name, string $value):void {
-    \header("X-Tym-{$name}: {$value}");
+    \header("X-TFr-{$name}: {$value}");
   }
 
   /**
-   * Send multiple custom X-Tym headers.
+   * Send multiple custom X-TFr headers.
    */
   public static function sendCustomHeaders(array $headers):void {
     foreach ($headers as $name => $value) {
       if (!\is_int($name)) {
-        \header("X-Tym-{$name}: {$value}");
+        \header("X-TFr-{$name}: {$value}");
       }
     }
   }
 
   /**
-   * Get custom X-Tym headers from response.
+   * Get custom X-TFr headers from response.
    *
    * @param string $find_key Specific key to find (optional)
    * @return array|string|null Headers array, specific value, or null
@@ -274,7 +274,7 @@ class Header {
       return empty($find_key) ? [] : null;
     }
 
-    $prefix = 'X-Tym-';
+    $prefix = 'X-TFr-';
     $out = [];
     $headers = \apache_response_headers();
 

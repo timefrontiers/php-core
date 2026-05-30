@@ -223,7 +223,7 @@ class Time {
    * @param string|int $datetime Datetime string or Unix timestamp
    * @return string Formatted datetime
    */
-  public static function dateTym(string|int $datetime = ''):string {
+  public static function datetime(string|int $datetime = ''):string {
     return self::mdy($datetime) . ' at ' . self::hms($datetime);
   }
 
@@ -234,7 +234,7 @@ class Time {
    * @param bool $short Use short weekday/month names
    * @return string Formatted date
    */
-  public static function weekDateTym(string|int $datetime = '', bool $short = false):string {
+  public static function weekDatetime(string|int $datetime = '', bool $short = false):string {
     return self::weekday($datetime, $short) . ', '
       . self::day($datetime) . ' '
       . self::month($datetime, $short) . ' '
@@ -446,19 +446,5 @@ class Time {
    */
   public static function toIso(string|int $datetime = ''):string {
     return \date(self::ISO8601, self::toTimestamp($datetime));
-  }
-}
-
-// ============================================================================
-// Global function for backward compatibility
-// ============================================================================
-
-if (!\function_exists('tym')) {
-  /**
-   * Get current Unix timestamp.
-   * @return int
-   */
-  function tym():int {
-    return \time();
   }
 }
