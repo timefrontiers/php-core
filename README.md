@@ -2,7 +2,7 @@
 
 Core utilities, enums, and helpers for TimeFrontiers packages.
 
-[![PHP Version](https://img.shields.io/badge/php-%3E%3D8.1-8892BF.svg)](https://php.net/)
+[![PHP Version](https://img.shields.io/badge/php-%3E%3D8.5-8892BF.svg)](https://php.net/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Installation
@@ -13,7 +13,7 @@ composer require timefrontiers/php-core
 
 ## Requirements
 
-- PHP 8.1+
+- PHP 8.5+
 - ext-curl (for URL utilities)
 - `giggsey/libphonenumber-for-php` ^8.13 (for `Phone` utilities — installed automatically)
 
