@@ -4,95 +4,68 @@ declare(strict_types=1);
 
 namespace TimeFrontiers\Http;
 
-/**
- * HTTP utility functions.
- */
+/** HTTP response and inbound request utilities. */
 class Http {
 
-  /**
-   * Redirect to a URL and exit.
-   */
   public static function redirect(string $location, HttpStatus $status = HttpStatus::FOUND):never {
+    self::assertRedirectLocation($location);
     $status->send();
     \header("Location: {$location}");
     exit;
   }
 
-  /**
-   * Redirect to a URL without exiting (for testing).
-   */
   public static function redirectSoft(string $location, HttpStatus $status = HttpStatus::FOUND):void {
+    self::assertRedirectLocation($location);
     $status->send();
     \header("Location: {$location}");
   }
 
-  /**
-   * Send a JSON response.
-   */
   public static function json(
     mixed $data,
     HttpStatus $status = HttpStatus::OK,
     int $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
   ):never {
+    $body = \json_encode($data, $flags | JSON_THROW_ON_ERROR);
     $status->send();
     \header('Content-Type: application/json; charset=utf-8');
-    echo \json_encode($data, $flags);
+    echo $body;
     exit;
   }
 
-  /**
-   * Send a success JSON response.
-   */
   public static function success(mixed $data = null, string $message = 'Success'):never {
-    self::json([
-      'success' => true,
-      'message' => $message,
-      'data' => $data,
-    ]);
+    self::json(['success' => true, 'message' => $message, 'data' => $data]);
   }
 
-  /**
-   * Send an error JSON response.
-   */
+  /** @param array<array-key, mixed> $errors */
   public static function error(
     string $message,
     HttpStatus $status = HttpStatus::BAD_REQUEST,
     array $errors = []
   ):never {
-    self::json([
-      'success' => false,
-      'message' => $message,
-      'errors' => $errors,
-    ], $status);
+    self::json(['success' => false, 'message' => $message, 'errors' => $errors], $status);
   }
 
-  /**
-   * Send a JSONP response (callback-wrapped JSON). Exits after sending.
-   *
-   * @throws \InvalidArgumentException When the callback name is unsafe.
-   */
+  /** @deprecated Prefer JSON with CORS; JSONP remains only for 1.x compatibility. */
   public static function jsonp(
     mixed $data,
     string $callback,
     HttpStatus $status = HttpStatus::OK,
     int $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
   ):never {
-    if (!\preg_match('/^[a-zA-Z_][a-zA-Z0-9_]*$/', $callback)) {
-      throw new \InvalidArgumentException('Invalid JSONP callback name');
+    if (!\preg_match('/^[a-zA-Z_$][a-zA-Z0-9_$]*$/D', $callback)) {
+      throw new \InvalidArgumentException('Invalid JSONP callback name.');
     }
-
+    $body = \json_encode($data, $flags | JSON_THROW_ON_ERROR);
     $status->send();
     \header('Content-Type: application/javascript; charset=utf-8');
-    echo $callback . '(' . \json_encode($data, $flags) . ');';
+    echo $callback . '(' . $body . ');';
     exit;
   }
 
   /**
-   * Build a standardized response array without sending it. Useful when you
-   * want to return a body from a controller, log it, or pass it through
-   * middleware before emitting.
-   *
-   * @return array{success: bool, message: string, data?: mixed, errors?: array, meta?: array}
+   * @param array<array-key, mixed> $errors
+   * @param array<array-key, mixed> $meta
+   * @return array{success: bool, message: string, data?: mixed, errors?: array<array-key, mixed>, meta?: array<array-key, mixed>}
    */
   public static function buildResponse(
     bool $success,
@@ -101,164 +74,137 @@ class Http {
     array $errors = [],
     array $meta = []
   ):array {
-    $response = [
-      'success' => $success,
-      'message' => $message,
-    ];
-
-    if ($data !== null) {
-      $response['data'] = $data;
-    }
-
-    if (!empty($errors)) {
-      $response['errors'] = $errors;
-    }
-
-    if (!empty($meta)) {
-      $response['meta'] = $meta;
-    }
-
+    $response = ['success' => $success, 'message' => $message];
+    if ($data !== null) $response['data'] = $data;
+    if ($errors !== []) $response['errors'] = $errors;
+    if ($meta !== []) $response['meta'] = $meta;
     return $response;
   }
 
   /**
-   * Get the client's IP address.
+   * Resolve a client address. Forwarding data is ignored unless an immutable
+   * trusted-proxy policy is supplied and trusts the immediate peer.
+   *
+   * @param array<string, mixed>|null $server
    */
-  public static function clientIp():string {
-    $headers = [
-      'HTTP_CF_CONNECTING_IP',     // Cloudflare
-      'HTTP_X_FORWARDED_FOR',      // Proxy
-      'HTTP_X_REAL_IP',            // Nginx
-      'HTTP_CLIENT_IP',            // Shared internet
-      'REMOTE_ADDR',               // Standard
-    ];
-
-    foreach ($headers as $header) {
-      if (!empty($_SERVER[$header])) {
-        $ips = \explode(',', $_SERVER[$header]);
-        $ip = \trim($ips[0]);
-
-        if (\filter_var($ip, FILTER_VALIDATE_IP)) {
-          return $ip;
-        }
-      }
+  public static function clientIp(?TrustedProxyConfig $proxies = null, ?array $server = null):string {
+    $server ??= $_SERVER;
+    if ($proxies !== null) {
+      return $proxies->clientIp($server);
     }
-
-    return '0.0.0.0';
+    $peer = $server['REMOTE_ADDR'] ?? null;
+    return \is_string($peer) && \filter_var($peer, FILTER_VALIDATE_IP) !== false
+      ? $peer
+      : '0.0.0.0';
   }
 
-  /**
-   * Get the request method.
-   */
   public static function method():string {
-    return \strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    return \strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
   }
 
-  /**
-   * Check if request is a specific method.
-   */
   public static function isMethod(string $method):bool {
     return self::method() === \strtoupper($method);
   }
 
-  /**
-   * Check if request is AJAX/XHR.
-   */
   public static function isAjax():bool {
-    return (\strtolower($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '') === 'xmlhttprequest')
-      || (self::accepts('application/json'));
+    return \strtolower((string) ($_SERVER['HTTP_X_REQUESTED_WITH'] ?? '')) === 'xmlhttprequest'
+      || self::accepts('application/json');
   }
 
-  /**
-   * Check if request accepts a content type.
-   */
   public static function accepts(string $content_type):bool {
-    $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
-    return \str_contains($accept, $content_type);
+    return \str_contains((string) ($_SERVER['HTTP_ACCEPT'] ?? ''), $content_type);
+  }
+
+  /** @param array<string, mixed>|null $server */
+  public static function isSecure(?TrustedProxyConfig $proxies = null, ?array $server = null):bool {
+    $server ??= $_SERVER;
+    return $proxies?->isSecure($server) ?? self::isDirectlySecure($server);
+  }
+
+  /** @param array<string, mixed> $server */
+  public static function isDirectlySecure(array $server):bool {
+    $https = $server['HTTPS'] ?? null;
+    if (\is_string($https) && $https !== '' && \strtolower($https) !== 'off') {
+      return true;
+    }
+    return (string) ($server['SERVER_PORT'] ?? '') === '443';
   }
 
   /**
-   * Check if request is secure (HTTPS).
+   * Build the current URL from a canonical origin policy. Without one, the
+   * server-configured SERVER_NAME is used and HTTP_HOST is ignored.
+   *
+   * @param array<string, mixed>|null $server
    */
-  public static function isSecure():bool {
-    if (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') {
-      return true;
+  public static function currentUrl(
+    ?OriginPolicy $originPolicy = null,
+    ?TrustedProxyConfig $proxies = null,
+    ?array $server = null
+  ):string {
+    $server ??= $_SERVER;
+    $secure = self::isSecure($proxies, $server);
+    if ($originPolicy !== null) {
+      $origin = $originPolicy->origin($server, $secure);
+    } else {
+      $serverName = $server['SERVER_NAME'] ?? 'localhost';
+      if (!\is_string($serverName) || !\preg_match('/^[a-z0-9.:-]+$/iD', $serverName)) {
+        $serverName = 'localhost';
+      }
+      $origin = ($secure ? 'https' : 'http') . '://' . $serverName;
     }
 
-    if (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') {
-      return true;
+    $uri = $server['REQUEST_URI'] ?? '/';
+    if (!\is_string($uri) || !\str_starts_with($uri, '/') || \preg_match('/[\r\n]/', $uri)) {
+      $uri = '/';
     }
-
-    if (!empty($_SERVER['HTTP_X_FORWARDED_SSL']) && $_SERVER['HTTP_X_FORWARDED_SSL'] === 'on') {
-      return true;
-    }
-
-    return ($_SERVER['SERVER_PORT'] ?? 80) == 443;
+    return $origin . $uri;
   }
 
-  /**
-   * Get the full current URL.
-   */
-  public static function currentUrl():string {
-    $scheme = self::isSecure() ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-    $uri = $_SERVER['REQUEST_URI'] ?? '/';
-
-    return "{$scheme}://{$host}{$uri}";
-  }
-
-  /**
-   * Get request header.
-   */
   public static function header(string $name):?string {
-    // Try apache_request_headers first
+    self::assertHeaderName($name);
     if (\function_exists('apache_request_headers')) {
       $headers = \apache_request_headers();
-      if (isset($headers[$name])) {
-        return $headers[$name];
-      }
-      // Try case-insensitive
       foreach ($headers as $key => $value) {
-        if (\strtolower($key) === \strtolower($name)) {
+        if (\strcasecmp((string) $key, $name) === 0 && \is_string($value) && !\preg_match('/[\r\n]/', $value)) {
           return $value;
         }
       }
     }
 
-    // Fallback to $_SERVER
-    $server_key = 'HTTP_' . \strtoupper(\str_replace('-', '_', $name));
-    return $_SERVER[$server_key] ?? null;
+    $key = 'HTTP_' . \strtoupper(\str_replace('-', '_', $name));
+    $value = $_SERVER[$key] ?? null;
+    return \is_string($value) && !\preg_match('/[\r\n]/', $value) ? $value : null;
   }
 
-  /**
-   * Get all request headers.
-   */
+  /** @return array<string, string> */
   public static function headers():array {
-    if (\function_exists('apache_request_headers')) {
-      return \apache_request_headers();
-    }
-
+    $source = \function_exists('apache_request_headers') ? \apache_request_headers() : $_SERVER;
     $headers = [];
-    foreach ($_SERVER as $key => $value) {
-      if (\str_starts_with($key, 'HTTP_')) {
-        $name = \str_replace('_', '-', \substr($key, 5));
-        $name = \ucwords(\strtolower($name), '-');
+    foreach ($source as $key => $value) {
+      if (!\is_string($value) || \preg_match('/[\r\n]/', $value)) continue;
+      if (\function_exists('apache_request_headers')) {
+        $name = (string) $key;
+      } elseif (\str_starts_with((string) $key, 'HTTP_')) {
+        $name = \ucwords(\strtolower(\str_replace('_', '-', \substr((string) $key, 5))), '-');
+      } else {
+        continue;
+      }
+      if (\preg_match("/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/D", $name)) {
         $headers[$name] = $value;
       }
     }
-
     return $headers;
   }
 
-  /**
-   * Set response header.
-   */
   public static function setHeader(string $name, string $value):void {
+    self::assertHeaderName($name);
+    self::assertHeaderValue($value);
     \header("{$name}: {$value}");
   }
 
   /**
-   * Set CORS headers.
+   * @param list<string> $methods
+   * @param list<string> $headers
    */
   public static function cors(
     string $origin = '*',
@@ -266,24 +212,54 @@ class Http {
     array $headers = ['Content-Type', 'Authorization'],
     int $max_age = 86400
   ):void {
+    if ($max_age < 0) throw new \InvalidArgumentException('CORS max age cannot be negative.');
     self::setHeader('Access-Control-Allow-Origin', $origin);
     self::setHeader('Access-Control-Allow-Methods', \implode(', ', $methods));
     self::setHeader('Access-Control-Allow-Headers', \implode(', ', $headers));
     self::setHeader('Access-Control-Max-Age', (string) $max_age);
-
-    // Handle preflight
     if (self::isMethod('OPTIONS')) {
       HttpStatus::NO_CONTENT->send();
       exit;
     }
   }
 
-  /**
-   * Set no-cache headers.
-   */
   public static function noCache():void {
     self::setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
     self::setHeader('Pragma', 'no-cache');
     self::setHeader('Expires', 'Thu, 01 Jan 1970 00:00:00 GMT');
+  }
+
+  public static function assertRedirectLocation(string $location):void {
+    self::assertHeaderValue($location);
+    if (
+      $location === ''
+      || \preg_match('/[\\\\\x00-\x20\x7f]/', $location)
+      || \str_starts_with($location, '//')
+    ) {
+      throw new \InvalidArgumentException('Redirect location is invalid.');
+    }
+    $parts = \parse_url($location);
+    if ($parts === false) {
+      throw new \InvalidArgumentException('Redirect location is malformed.');
+    }
+    $scheme = $parts['scheme'] ?? null;
+    if ($scheme !== null && !\in_array(\strtolower((string) $scheme), ['http', 'https'], true)) {
+      throw new \InvalidArgumentException('Redirects support only relative or HTTP(S) locations.');
+    }
+    if ($scheme !== null && (!isset($parts['host']) || isset($parts['user']) || isset($parts['pass']))) {
+      throw new \InvalidArgumentException('Absolute redirect locations require a safe authority.');
+    }
+  }
+
+  public static function assertHeaderName(string $name):void {
+    if (!\preg_match("/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/D", $name)) {
+      throw new \InvalidArgumentException('HTTP header name is invalid.');
+    }
+  }
+
+  public static function assertHeaderValue(string $value):void {
+    if (\preg_match('/[\r\n\x00]/', $value)) {
+      throw new \InvalidArgumentException('HTTP header value contains control characters.');
+    }
   }
 }

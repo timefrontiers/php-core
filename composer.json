@@ -1,27 +1,38 @@
 {
   "name": "timefrontiers/php-core",
   "description": "Core utilities, enums, and helpers for TimeFrontiers packages",
+  "keywords": ["php", "core", "utilities", "enums", "helpers", "phone"],
+  "homepage": "https://github.com/timefrontiers/php-core",
   "type": "library",
   "license": "MIT",
-  "keywords": ["php", "core", "utilities", "enums", "helpers", "phone"],
   "authors": [
     {
-      "name": "TimeFrontiers",
-      "email": "dev@timefrontiers.com",
-      "homepage": "https://timefrontiers.com"
+      "name": "Ikechukwu Okalia",
+      "email": "consult@ikechukwuokalia.dev",
+      "homepage": "https://ikechukwuokalia.dev",
+      "role": "developer"
+    },
+    {
+      "name": "Time Frontiers Ltd",
+      "email": "git@timefrontiers.com",
+      "homepage": "https://git.timefrontiers.com",
+      "role": "developer"
     }
   ],
   "require": {
     "php": "^8.5",
     "ext-curl": "*",
-    "giggsey/libphonenumber-for-php": "^8.13"
+    "ext-json": "*",
+    "ext-libxml": "*",
+    "ext-simplexml": "*",
+    "giggsey/libphonenumber-for-php": "^8.13",
+    "timefrontiers/php-has-errors": "^1.0",
+    "timefrontiers/php-validator": "^1.1.1"
   },
   "require-dev": {
-    "phpunit/phpunit": "^10.0"
-  },
-  "suggest": {
-    "timefrontiers/php-validator": "For request parameter validation",
-    "timefrontiers/php-session": "For CSRF token validation"
+    "php-parallel-lint/php-parallel-lint": "^1.4",
+    "phpstan/phpstan": "^2.2",
+    "phpunit/phpunit": "^10.5"
   },
   "autoload": {
     "psr-4": {
@@ -35,5 +46,15 @@
   },
   "config": {
     "sort-packages": true
+  },
+  "scripts": {
+    "analyse": "@php vendor/bin/phpstan analyse --configuration=phpstan.neon.dist --memory-limit=1G --no-progress",
+    "check": [
+      "@lint",
+      "@test",
+      "@analyse"
+    ],
+    "lint": "@php vendor/bin/parallel-lint src tests",
+    "test": "@php vendor/bin/phpunit --configuration=phpunit.xml.dist --fail-on-warning --fail-on-risky --fail-on-deprecation --fail-on-notice"
   }
 }

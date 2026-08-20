@@ -93,6 +93,7 @@ enum AccessRank: int {
   /**
    * Get all ranks as [value => label] array.
    */
+  /** @return array<int, string> */
   public static function options():array {
     $options = [];
     foreach (self::cases() as $case) {

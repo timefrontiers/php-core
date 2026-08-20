@@ -14,6 +14,18 @@ use TimeFrontiers\Url;
  */
 class Header {
 
+  private static ?OriginPolicy $_error_origin = null;
+  private static ?TrustedProxyConfig $_error_proxies = null;
+
+  /** Configure an immutable canonical origin for absolute error redirects. */
+  public static function configureErrorOrigin(
+    OriginPolicy $origin,
+    ?TrustedProxyConfig $proxies = null
+  ):void {
+    self::$_error_origin = $origin;
+    self::$_error_proxies = $proxies;
+  }
+
   // =========================================================================
   // Send Status
   // =========================================================================
@@ -22,7 +34,7 @@ class Header {
    * Send HTTP status header and exit.
    *
    * @param HttpStatus|int $status Status code or enum
-   * @param array $custom_headers Custom X-TFr headers to add
+   * @param array<string, string> $custom_headers Custom X-TFr headers to add
    */
   public static function send(HttpStatus|int $status, array $custom_headers = []):never {
     self::sendCustomHeaders($custom_headers);
@@ -40,7 +52,7 @@ class Header {
    * Send HTTP status without exiting.
    *
    * @param HttpStatus|int $status Status code or enum
-   * @param array $custom_headers Custom X-TFr headers to add
+   * @param array<string, string> $custom_headers Custom X-TFr headers to add
    */
   public static function sendSoft(HttpStatus|int $status, array $custom_headers = []):void {
     self::sendCustomHeaders($custom_headers);
@@ -61,13 +73,14 @@ class Header {
    *
    * @param string $url Destination URL
    * @param string $message Optional message (added as query param)
-   * @param array $custom_headers Custom X-TFr headers to add
+   * @param array<string, string> $custom_headers Custom X-TFr headers to add
    */
   public static function redirect(string $url, string $message = '', array $custom_headers = []):never {
     if (!empty($message)) {
       $url = Url::withParams($url, ['message' => \urlencode($message)]);
     }
 
+    Http::assertRedirectLocation($url);
     self::sendCustomHeaders($custom_headers);
     \header("Location: {$url}");
     exit;
@@ -81,9 +94,13 @@ class Header {
    * @param string $message Message to display while waiting
    */
   public static function refresh(string $url, int $seconds = 10, string $message = ''):void {
+    if ($seconds < 0) {
+      throw new \InvalidArgumentException('Refresh delay cannot be negative.');
+    }
+    Http::assertRedirectLocation($url);
     $message = !empty($message) ? $message : "You will be redirected in {$seconds} seconds.";
     \header("Refresh: {$seconds}; url={$url}");
-    echo $message;
+    echo \htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
   }
 
   // =========================================================================
@@ -95,7 +112,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-TFr headers
+   * @param array<string, string> $custom_headers Custom X-TFr headers
    */
   public static function badRequest(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::BAD_REQUEST, $redirect, $message, $custom_headers);
@@ -106,7 +123,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-TFr headers
+   * @param array<string, string> $custom_headers Custom X-TFr headers
    */
   public static function unauthorized(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::UNAUTHORIZED, $redirect, $message, $custom_headers);
@@ -117,7 +134,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-TFr headers
+   * @param array<string, string> $custom_headers Custom X-TFr headers
    */
   public static function forbidden(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::FORBIDDEN, $redirect, $message, $custom_headers);
@@ -128,7 +145,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-TFr headers
+   * @param array<string, string> $custom_headers Custom X-TFr headers
    */
   public static function notFound(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::NOT_FOUND, $redirect, $message, $custom_headers);
@@ -139,7 +156,7 @@ class Header {
    *
    * @param bool $redirect Redirect to error page instead of just status
    * @param string $message Error message
-   * @param array $custom_headers Custom X-TFr headers
+   * @param array<string, string> $custom_headers Custom X-TFr headers
    */
   public static function internalError(bool $redirect = false, string $message = '', array $custom_headers = []):never {
     self::_errorPage(HttpStatus::INTERNAL_SERVER_ERROR, $redirect, $message, $custom_headers);
@@ -156,8 +173,9 @@ class Header {
    * @param string $message Message if authentication fails
    */
   public static function authDialog(string $realm = 'Restricted Area', string $message = 'Authentication required.'):never {
+    Http::assertHeaderValue($realm);
     \header('HTTP/1.1 401 Unauthorized');
-    \header("WWW-Authenticate: Basic realm=\"{$realm}\"");
+    \header('WWW-Authenticate: Basic realm="' . \addcslashes($realm, "\\\"") . '"');
     echo $message;
     exit;
   }
@@ -195,6 +213,8 @@ class Header {
    * Set Content-Type header.
    */
   public static function contentType(string $type, string $charset = 'utf-8'):void {
+    Http::assertHeaderValue($type);
+    Http::assertHeaderValue($charset);
     if (!empty($charset)) {
       \header("Content-Type: {$type}; charset={$charset}");
     } else {
@@ -213,6 +233,7 @@ class Header {
    * Set Content-Language header.
    */
   public static function language(string $lang):void {
+    Http::assertHeaderValue($lang);
     \header("Content-language: {$lang}");
   }
 
@@ -223,8 +244,19 @@ class Header {
    * @param bool $inline Display inline instead of download
    */
   public static function download(string $filename, bool $inline = false):void {
+    if (
+      $filename === ''
+      || $filename !== \basename(\str_replace('\\', '/', $filename))
+      || \preg_match('/[\x00-\x1f\x7f"\\\\]/', $filename)
+    ) {
+      throw new \InvalidArgumentException('Download filename is unsafe.');
+    }
     $disposition = $inline ? 'inline' : 'attachment';
-    \header("Content-Disposition: {$disposition}; filename=\"{$filename}\"");
+    $fallback = \preg_replace('/[^A-Za-z0-9._-]/', '_', $filename) ?: 'download';
+    \header(
+      "Content-Disposition: {$disposition}; filename=\"{$fallback}\"; filename*=UTF-8''"
+      . \rawurlencode($filename)
+    );
   }
 
   // =========================================================================
@@ -235,13 +267,15 @@ class Header {
    * Set X-Powered-By header.
    */
   public static function poweredBy(string $by):void {
-    \header("X-Powered-By: {$by}");
+    self::set('X-Powered-By', $by);
   }
 
   /**
    * Set a custom header.
    */
   public static function set(string $name, string $value):void {
+    Http::assertHeaderName($name);
+    Http::assertHeaderValue($value);
     \header("{$name}: {$value}");
   }
 
@@ -249,16 +283,21 @@ class Header {
    * Set a custom X-TFr header.
    */
   public static function setCustom(string $name, string $value):void {
-    \header("X-TFr-{$name}: {$value}");
+    self::set("X-TFr-{$name}", $value);
   }
 
   /**
    * Send multiple custom X-TFr headers.
+   *
+   * @param array<string, string> $headers
    */
   public static function sendCustomHeaders(array $headers):void {
     foreach ($headers as $name => $value) {
       if (!\is_int($name)) {
-        \header("X-TFr-{$name}: {$value}");
+        if (!\is_string($value)) {
+          throw new \InvalidArgumentException('Custom header values must be strings.');
+        }
+        self::setCustom((string) $name, $value);
       }
     }
   }
@@ -267,7 +306,7 @@ class Header {
    * Get custom X-TFr headers from response.
    *
    * @param string $find_key Specific key to find (optional)
-   * @return array|string|null Headers array, specific value, or null
+   * @return array<string, string>|string|null Headers array, specific value, or null
    */
   public static function getCustom(string $find_key = ''):array|string|null {
     if (!\function_exists('apache_response_headers')) {
@@ -309,11 +348,16 @@ class Header {
   /**
    * Set Content-Security-Policy header.
    *
-   * @param array $directives CSP directives [directive => value]
+   * @param array<string, string> $directives CSP directives [directive => value]
    */
   public static function csp(array $directives):void {
     $parts = [];
     foreach ($directives as $directive => $value) {
+      Http::assertHeaderName((string) $directive);
+      if (!\is_string($value)) {
+        throw new \InvalidArgumentException('CSP directive values must be strings.');
+      }
+      Http::assertHeaderValue($value);
       $parts[] = "{$directive} {$value}";
     }
 
@@ -356,6 +400,8 @@ class Header {
 
   /**
    * Handle error page response.
+   *
+   * @param array<string, string> $custom_headers
    */
   private static function _errorPage(
     HttpStatus $status,
@@ -364,13 +410,20 @@ class Header {
     array $custom_headers
   ):never {
     if ($redirect) {
-      $scheme = \defined('REQUEST_SCHEME') ? REQUEST_SCHEME : 'http://';
-      $host = $_SERVER['HTTP_HOST'] ?? 'localhost';
-      $url = "{$scheme}{$host}/app/{$status->value}";
+      $origin = self::$_error_origin?->origin(
+        $_SERVER,
+        Http::isSecure(self::$_error_proxies)
+      ) ?? '';
+      $url = "{$origin}/app/{$status->value}";
 
       $query = [];
-      if (!empty($_SERVER['REQUEST_URI'])) {
-        $query['request'] = $_SERVER['REQUEST_URI'];
+      $requestUri = $_SERVER['REQUEST_URI'] ?? null;
+      if (
+        \is_string($requestUri)
+        && \str_starts_with($requestUri, '/')
+        && !\preg_match('/[\r\n]/', $requestUri)
+      ) {
+        $query['request'] = $requestUri;
       }
       if (!empty($message)) {
         $query['message'] = $message;

@@ -4,287 +4,247 @@ declare(strict_types=1);
 
 namespace TimeFrontiers\Http;
 
-/**
- * HTTP client response wrapper.
- *
- * Provides convenient methods to access response data.
- */
+/** Bounded HTTP response wrapper with explicit decode failures. */
 class ClientResponse {
 
   private int $_status_code;
   private string $_body;
+  /** @var array<string, string> */
   private array $_headers;
   private ?string $_error;
-  private mixed $_decoded = null;
+  /** @var array<string, int|string|float|bool|null> */
+  private array $_diagnostic;
+  /** @var array<string, mixed> */
+  private array $_decoded = [];
 
+  /**
+   * @param array<string, string> $headers
+   * @param array<string, int|string|float|bool|null> $diagnostic
+   */
   public function __construct(
     int $status_code,
     string $body,
     array $headers = [],
-    ?string $error = null
+    ?string $error = null,
+    array $diagnostic = []
   ) {
     $this->_status_code = $status_code;
     $this->_body = $body;
     $this->_headers = $headers;
     $this->_error = $error;
+    $this->_diagnostic = $diagnostic;
   }
 
-  // =========================================================================
-  // Status
-  // =========================================================================
-
-  /**
-   * Get HTTP status code.
-   */
   public function statusCode():int {
     return $this->_status_code;
   }
 
-  /**
-   * Get HTTP status as enum (if valid).
-   */
   public function status():?HttpStatus {
     return HttpStatus::fromCode($this->_status_code);
   }
 
-  /**
-   * Get status message (e.g., "200 OK").
-   */
   public function statusMessage():string {
-    $status = $this->status();
-    return $status ? $status->line() : "{$this->_status_code} Unknown";
+    return $this->status()?->line() ?? "{$this->_status_code} Unknown";
   }
 
-  /**
-   * Check if response is successful (2xx).
-   */
   public function isSuccess():bool {
     return $this->_status_code >= 200 && $this->_status_code < 300;
   }
 
-  /**
-   * Check if response is a redirect (3xx).
-   */
   public function isRedirect():bool {
     return $this->_status_code >= 300 && $this->_status_code < 400;
   }
 
-  /**
-   * Check if response is a client error (4xx).
-   */
   public function isClientError():bool {
     return $this->_status_code >= 400 && $this->_status_code < 500;
   }
 
-  /**
-   * Check if response is a server error (5xx).
-   */
   public function isServerError():bool {
     return $this->_status_code >= 500 && $this->_status_code < 600;
   }
 
-  /**
-   * Check if response is an error (4xx or 5xx).
-   */
   public function isError():bool {
     return $this->_status_code >= 400;
   }
 
-  /**
-   * Check if response is OK (200).
-   */
   public function isOk():bool {
     return $this->_status_code === 200;
   }
 
-  /**
-   * Check if request failed (cURL error).
-   */
   public function isFailed():bool {
     return $this->_error !== null;
   }
 
-  // =========================================================================
-  // Body
-  // =========================================================================
-
-  /**
-   * Get raw response body.
-   */
   public function body():string {
     return $this->_body;
   }
 
-  /**
-   * Get response body as text.
-   */
   public function text():string {
     return $this->_body;
   }
 
   /**
-   * Decode JSON response body.
+   * Decode JSON. Valid JSON `null` returns null; malformed JSON throws.
    *
-   * @param bool $assoc Return associative array (default: true)
-   * @return mixed Decoded data or null on failure
+   * @throws \JsonException
    */
   public function json(bool $assoc = true):mixed {
-    if ($this->_decoded === null) {
-      $this->_decoded = \json_decode($this->_body, $assoc);
+    $key = $assoc ? 'assoc' : 'object';
+    if (!\array_key_exists($key, $this->_decoded)) {
+      $this->_decoded[$key] = \json_decode(
+        $this->_body,
+        $assoc,
+        512,
+        JSON_THROW_ON_ERROR
+      );
     }
-
-    return $this->_decoded;
+    return $this->_decoded[$key];
   }
 
-  /**
-   * Get a value from JSON response using dot notation.
-   *
-   * @param string $key Key with dot notation (e.g., "data.user.name")
-   * @param mixed $default Default value if not found
-   * @return mixed Value or default
-   */
   public function get(string $key, mixed $default = null):mixed {
     $data = $this->json();
-
     if (!\is_array($data)) {
       return $default;
     }
 
-    $keys = \explode('.', $key);
     $value = $data;
-
-    foreach ($keys as $k) {
-      if (!\is_array($value) || !\array_key_exists($k, $value)) {
+    foreach (\explode('.', $key) as $part) {
+      if (!\is_array($value) || !\array_key_exists($part, $value)) {
         return $default;
       }
-      $value = $value[$k];
+      $value = $value[$part];
     }
-
     return $value;
   }
 
   /**
-   * Decode XML response body.
+   * Decode UTF-8 XML without entity expansion or network access.
    *
-   * @return \SimpleXMLElement|false XML object or false on failure
+   * @throws \LengthException
+   * @throws \UnexpectedValueException
    */
-  public function xml():\SimpleXMLElement|false {
-    \libxml_use_internal_errors(true);
-    $xml = \simplexml_load_string($this->_body);
-    \libxml_clear_errors();
+  public function xml(int $maxBytes = 1048576):\SimpleXMLElement {
+    if ($maxBytes < 1 || \strlen($this->_body) > $maxBytes) {
+      throw new \LengthException('XML response exceeds the configured limit.');
+    }
 
-    return $xml;
+    $body = $this->_body;
+    if (\str_starts_with($body, "\xEF\xBB\xBF")) {
+      $body = \substr($body, 3);
+    }
+    if (\str_contains($body, "\0") || \preg_match('//u', $body) !== 1) {
+      throw new \UnexpectedValueException('XML responses must use UTF-8 encoding.');
+    }
+    if (\preg_match('/\A<\?xml\b[^?]*\bencoding\s*=\s*(["\'])([^"\']+)\1/i', $body, $matches)) {
+      $encoding = \strtoupper(\trim($matches[2]));
+      if (!\in_array($encoding, ['UTF-8', 'UTF8'], true)) {
+        throw new \UnexpectedValueException('XML responses must declare UTF-8 encoding.');
+      }
+    }
+    if (\preg_match('/<!\s*(?:DOCTYPE|ENTITY)\b/iu', $body)) {
+      throw new \UnexpectedValueException('XML document type declarations are not allowed.');
+    }
+
+    $previous = \libxml_use_internal_errors(true);
+    try {
+      \libxml_clear_errors();
+      $xml = \simplexml_load_string(
+        $body,
+        \SimpleXMLElement::class,
+        LIBXML_NONET | LIBXML_COMPACT
+      );
+      if ($xml === false) {
+        throw new \UnexpectedValueException('HTTP response contains malformed XML.');
+      }
+      return $xml;
+    } finally {
+      \libxml_clear_errors();
+      \libxml_use_internal_errors($previous);
+    }
   }
 
-  // =========================================================================
-  // Headers
-  // =========================================================================
-
-  /**
-   * Get all response headers.
-   */
+  /** @return array<string, string> */
   public function headers():array {
     return $this->_headers;
   }
 
-  /**
-   * Get a specific header.
-   *
-   * @param string $name Header name (case-insensitive)
-   * @return string|null Header value or null
-   */
   public function header(string $name):?string {
-    // Try exact match first
-    if (isset($this->_headers[$name])) {
-      return $this->_headers[$name];
-    }
-
-    // Case-insensitive search
-    $lower = \strtolower($name);
     foreach ($this->_headers as $key => $value) {
-      if (\strtolower($key) === $lower) {
+      if (\strcasecmp($key, $name) === 0) {
         return $value;
       }
     }
-
     return null;
   }
 
-  /**
-   * Check if a header exists.
-   */
   public function hasHeader(string $name):bool {
     return $this->header($name) !== null;
   }
 
-  /**
-   * Get Content-Type header.
-   */
   public function contentType():?string {
     return $this->header('Content-Type');
   }
 
-  /**
-   * Check if response is JSON content type.
-   */
   public function isJson():bool {
     $type = $this->contentType();
-    return $type !== null && \str_contains($type, 'json');
+    return $type !== null && \str_contains(\strtolower($type), 'json');
   }
 
-  // =========================================================================
-  // Error Handling
-  // =========================================================================
-
-  /**
-   * Get cURL error message.
-   */
+  /** Safe, non-diagnostic transport failure text. */
   public function error():?string {
     return $this->_error;
   }
 
-  /**
-   * Throw exception if response is an error.
-   *
-   * @throws \RuntimeException If status code is 4xx or 5xx
-   * @return self For chaining
-   */
   public function throwIfError():self {
     if ($this->isFailed()) {
-      throw new \RuntimeException("HTTP request failed: {$this->_error}");
+      throw new \RuntimeException($this->_error ?? 'HTTP request failed.');
     }
-
     if ($this->isError()) {
-      $message = $this->get('message')
-        ?? $this->get('error')
-        ?? $this->statusMessage();
-
-      throw new \RuntimeException("HTTP {$message}", $this->_status_code);
+      throw new \RuntimeException('HTTP ' . $this->statusMessage(), $this->_status_code);
     }
-
     return $this;
   }
 
-  // =========================================================================
-  // Debug
-  // =========================================================================
-
   /**
-   * Get response as array for debugging.
+   * Safe projection for ordinary logging or API composition.
+   *
+   * @return array{status_code: int, success: bool, redirect: bool, failed: bool, content_type: ?string}
    */
   public function toArray():array {
     return [
       'status_code' => $this->_status_code,
-      'headers' => $this->_headers,
-      'body' => $this->_body,
-      'json' => $this->json(),
-      'error' => $this->_error,
+      'success' => $this->isSuccess(),
+      'redirect' => $this->isRedirect(),
+      'failed' => $this->isFailed(),
+      'content_type' => $this->contentType(),
     ];
   }
 
   /**
-   * Magic method for string conversion.
+   * Explicit trusted diagnostic projection. May contain response/provider data.
+   *
+   * @return array<string, mixed>
    */
+  public function toDebugArray():array {
+    $json = null;
+    $jsonError = null;
+    try {
+      $json = $this->json();
+    } catch (\JsonException $error) {
+      $jsonError = $error->getMessage();
+    }
+
+    return [
+      ...$this->toArray(),
+      'headers' => $this->_headers,
+      'body' => $this->_body,
+      'json' => $json,
+      'json_error' => $jsonError,
+      'error' => $this->_error,
+      'diagnostic' => $this->_diagnostic,
+    ];
+  }
+
   public function __toString():string {
     return $this->_body;
   }

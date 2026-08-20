@@ -8,7 +8,7 @@ namespace TimeFrontiers\Http;
  * HTTP status codes as an enum.
  *
  * Provides `send()`, `phrase()`, and category predicates for every
- * standard status code (1xx–5xx).
+ * standard status code (1xx-5xx).
  */
 enum HttpStatus: int {
 

@@ -5,326 +5,240 @@ declare(strict_types=1);
 namespace TimeFrontiers\Http;
 
 use TimeFrontiers\Helper\HasErrors;
-use TimeFrontiers\AccessRank;
+use TimeFrontiers\Validation\Validator;
 
-/**
- * HTTP request parameter handling with validation.
- *
- * Extracts and validates parameters from GET/POST/custom sources.
- * Uses HasErrors for error collection.
- */
+/** HTTP request extraction with explicit validation and CSRF boundaries. */
 class Request {
 
   use HasErrors;
 
+  /** @var array<string, mixed> */
   private array $_source;
+  private ?CsrfTokenManager $_csrf;
+  private static ?CsrfTokenManager $_legacyCsrf = null;
 
-  /**
-   * Create a new Request instance.
-   *
-   * @param string|array $method 'get', 'post', 'json', or custom array
-   */
-  public function __construct(string|array $method = 'post') {
+  /** @param string|array<string, mixed> $method */
+  public function __construct(string|array $method = 'post', ?CsrfTokenManager $csrf = null) {
+    $this->_csrf = $csrf;
     if (\is_array($method)) {
       $this->_source = $method;
-    } else {
-      $this->_source = match (\strtolower($method)) {
-        'get' => $_GET,
-        'post' => $_POST,
-        'json' => $this->_getJsonInput(),
-        'request' => $_REQUEST,
-        default => $_POST,
-      };
+      return;
     }
+
+    $this->_source = match (\strtolower($method)) {
+      'get' => $_GET,
+      'post' => $_POST,
+      'json' => $this->_getJsonInput(),
+      'request' => $_REQUEST,
+      default => $_POST,
+    };
   }
 
-  /**
-   * Create from GET parameters.
-   */
-  public static function fromGet():self {
-    return new self('get');
+  public static function fromGet(?CsrfTokenManager $csrf = null):self {
+    return new self('get', $csrf);
   }
 
-  /**
-   * Create from POST parameters.
-   */
-  public static function fromPost():self {
-    return new self('post');
+  public static function fromPost(?CsrfTokenManager $csrf = null):self {
+    return new self('post', $csrf);
   }
 
-  /**
-   * Create from JSON body.
-   */
-  public static function fromJson():self {
-    return new self('json');
+  public static function fromJson(?CsrfTokenManager $csrf = null):self {
+    return new self('json', $csrf);
   }
 
-  /**
-   * Create from custom array.
-   */
-  public static function fromArray(array $data):self {
-    return new self($data);
+  /** @param array<string, mixed> $data */
+  public static function fromArray(array $data, ?CsrfTokenManager $csrf = null):self {
+    return new self($data, $csrf);
   }
 
-  /**
-   * Get the raw input source.
-   */
+  public function withCsrfTokenManager(CsrfTokenManager $csrf):self {
+    $clone = clone $this;
+    $clone->_csrf = $csrf;
+    return $clone;
+  }
+
+  /** @return array<string, mixed> */
   public function all():array {
     return $this->_source;
   }
 
-  /**
-   * Get a single parameter.
-   *
-   * @param string $key Parameter name
-   * @param mixed $default Default value
-   * @return mixed Parameter value or default
-   */
   public function get(string $key, mixed $default = null):mixed {
-    if (!isset($this->_source[$key])) {
+    if (!\array_key_exists($key, $this->_source)) {
       return $default;
     }
-
     $value = $this->_source[$key];
-
-    // Trim strings
-    if (\is_string($value)) {
-      return \trim($value);
-    }
-
-    return $value;
+    return \is_string($value) ? \trim($value) : $value;
   }
 
-  /**
-   * Check if parameter exists.
-   */
   public function has(string $key):bool {
-    return isset($this->_source[$key]);
+    return \array_key_exists($key, $this->_source);
   }
 
   /**
-   * Get only allowed parameters.
-   *
-   * @param array $allowed List of allowed parameter names
-   * @return array Filtered parameters (null for missing)
+   * @param list<string> $allowed
+   * @return array<string, mixed>
    */
   public function only(array $allowed):array {
     $result = [];
-
     foreach ($allowed as $key) {
       $result[$key] = $this->get($key);
     }
-
     return $result;
   }
 
   /**
-   * Get parameters except specified ones.
-   *
-   * @param array $excluded List of excluded parameter names
-   * @return array Filtered parameters
+   * @param list<string> $excluded
+   * @return array<string, mixed>
    */
   public function except(array $excluded):array {
     return \array_diff_key($this->_source, \array_flip($excluded));
   }
 
   /**
-   * Validate and extract parameters.
+   * Validate legacy column declarations and return a first-class result.
+   * Each declaration remains `[label, rule, ...ruleParameters]`.
    *
-   * @param array $columns Validation rules [key => [label, type, ...options]]
-   * @param array $required Required parameter keys
-   * @param bool $strict If true, return false on any error; if false, return false only if required fields fail
-   * @return array|false Validated parameters or false on failure
+   * @param array<string, array<array-key, mixed>> $columns
+   * @param list<string> $required
+   */
+  public function validateResult(array $columns, array $required = []):RequestValidationResult {
+    if (!\class_exists(Validator::class)) {
+      $this->_internalError('validate', 'The required validation service is unavailable.');
+      return new RequestValidationResult(false, [], [
+        '_request' => ['Request validation is unavailable.'],
+      ]);
+    }
+
+    $requiredLookup = \array_fill_keys($required, true);
+    foreach ($required as $field) {
+      if (!\array_key_exists($field, $columns)) {
+        throw new \InvalidArgumentException("Required field '{$field}' has no validation rule.");
+      }
+    }
+
+    $rules = [];
+    $labels = [];
+    foreach ($columns as $field => $definition) {
+      if (!\is_string($field) || $field === '' || !\is_array($definition)) {
+        throw new \InvalidArgumentException('Request validation columns must use non-empty field names and rule arrays.');
+      }
+      $label = $definition[0] ?? $field;
+      $type = $definition[1] ?? null;
+      if (!\is_string($label) || $label === '' || !\is_string($type) || $type === '') {
+        throw new \InvalidArgumentException("Request field '{$field}' must declare a label and validation rule.");
+      }
+
+      $params = \array_values(\array_slice($definition, 2));
+      $rules[$field] = isset($requiredLookup[$field]) ? ['required'] : ['nullable'];
+      $rules[$field][] = $params === [] ? $type : [$type, ...$params];
+      $labels[$field] = $label;
+    }
+
+    $result = Validator::make($this->only(\array_keys($columns)), $rules);
+    $errors = [];
+    foreach ($result->errors() as $field => $messages) {
+      $label = $labels[$field] ?? $field;
+      foreach ($messages as $message) {
+        $safe = "[{$label}]: {$message}";
+        $errors[$field][] = $safe;
+        $this->_userError('validate', $safe);
+      }
+    }
+
+    return new RequestValidationResult(
+      $result->passes(),
+      $result->validated(),
+      $errors
+    );
+  }
+
+  /**
+   * Compatibility facade. `$strict` remains accepted; v1.1 fails closed on
+   * every configured validation error.
+   *
+   * @param array<string, array<array-key, mixed>> $columns
+   * @param list<string> $required
+   * @return array<string, mixed>|false
    */
   public function validate(array $columns, array $required = [], bool $strict = false):array|false {
-    $params = $this->only(\array_keys($columns));
-    $req_errors = 0;
-
-    // Check required fields
-    foreach ($required as $key) {
-      if (!isset($columns[$key])) {
-        continue;
-      }
-
-      $type = $columns[$key][1] ?? 'text';
-      $label = $columns[$key][0] ?? $key;
-
-      if ($type !== 'boolean') {
-        if (empty($params[$key])) {
-          $req_errors++;
-          $this->_userError('validate', "[{$label}]: is required but not present.");
-        }
-      } else {
-        if ($params[$key] === null || $params[$key] === '') {
-          $req_errors++;
-          $this->_userError('validate', "[{$label}]: is required but not present.");
-        }
-      }
-    }
-
-    // Validate values using Validator if available
-    if (\class_exists('\TimeFrontiers\Validator')) {
-      $validator = new \TimeFrontiers\Validator();
-
-      foreach ($params as $key => $value) {
-        if (!isset($columns[$key])) {
-          continue;
-        }
-
-        $type = $columns[$key][1] ?? 'text';
-        $label = $columns[$key][0] ?? $key;
-
-        // Cast numeric types
-        if ($type === 'int') {
-          $value = (int) $value;
-        } elseif ($type === 'float') {
-          $value = (float) $value;
-        }
-
-        if ($type !== 'boolean') {
-          if (!empty($value)) {
-            $validated = $validator->validate($value, $columns[$key]);
-
-            if ($validated === false) {
-              $this->_mergeValidatorErrors($validator, $type);
-            } else {
-              $params[$key] = $validated;
-            }
-          }
-        } else {
-          if ($value !== null && $value !== '') {
-            $params[$key] = (bool) $value;
-          }
-        }
-      }
-    }
-
-    // Return based on strict mode
-    if ($strict) {
-      return $this->hasErrors('validate') ? false : $params;
-    }
-
-    return ($this->hasErrors('validate') && $req_errors > 0) ? false : $params;
+    unset($strict);
+    $result = $this->validateResult($columns, $required);
+    return $result->passes() ? $result->validated() : false;
   }
 
-  /**
-   * Verify CSRF token.
-   *
-   * @param string $form Form identifier
-   * @param string $token Token from request
-   * @return bool True if valid
-   */
   public function verifyCSRF(string $form, string $token):bool {
-    global $session;
-
-    // Check session exists
-    if (!isset($session) || !\is_object($session)) {
-      $this->_internalError('verifyCSRF', 'Session not available for CSRF validation.');
+    if ($this->_csrf === null) {
+      $this->_internalError('verifyCSRF', 'No CSRF token manager was supplied.');
       return false;
     }
 
-    // Skip for logged in users (optional - depends on your security model)
-    if (\method_exists($session, 'isLoggedIn') && $session->isLoggedIn()) {
-      return true;
+    try {
+      $valid = $this->_csrf->verify($form, $token);
+    } catch (\Throwable $error) {
+      $this->_systemError('verifyCSRF', 'The CSRF token manager failed: ' . $error::class);
+      return false;
     }
 
-    // Get stored token
-    $sess_token = $_SESSION['CSRF_token'][$form] ?? null;
-
-    if (empty($sess_token)) {
+    if (!$valid) {
       $this->_userError(
         'verifyCSRF',
-        'No matching security token found. This might be an unauthorized or timed out request. Please reload the page and try again.'
+        'Security validation failed. Reload the page and try again.'
       );
-      return false;
     }
-
-    // Parse token and expiry
-    $parts = \explode('::', $sess_token);
-    $stored_token = $parts[0];
-    $expiry = (int) ($parts[1] ?? 0);
-
-    // Check expiry
-    if (\time() > $expiry) {
-      unset($_SESSION['CSRF_token'][$form]);
-      $this->_userError('verifyCSRF', 'Security token expired. Please reload the page and try again.');
-      return false;
-    }
-
-    // Verify token (timing-safe comparison)
-    if (!\hash_equals($stored_token, $token)) {
-      $this->_userError('verifyCSRF', 'Security validation failed. Please reload the page or contact admin.');
-      return false;
-    }
-
-    return true;
+    return $valid;
   }
 
-  /**
-   * Generate a CSRF token.
-   *
-   * @param string $form Form identifier
-   * @param int $ttl Token lifetime in seconds
-   * @return string The token
-   */
-  public static function generateCSRF(string $form, int $ttl = 3600):string {
-    $token = \bin2hex(\random_bytes(32));
-    $expiry = \time() + $ttl;
-
-    $_SESSION['CSRF_token'][$form] = "{$token}::{$expiry}";
-
-    return $token;
+  /** Configure only the deprecated static helpers. */
+  public static function configureLegacyCsrf(CsrfTokenManager $csrf):void {
+    self::$_legacyCsrf = $csrf;
   }
 
-  /**
-   * Get a CSRF hidden input field.
-   *
-   * @param string $form Form identifier
-   * @param string $name Input field name
-   * @param int $ttl Token lifetime
-   * @return string HTML input element
-   */
-  public static function csrfField(string $form, string $name = 'csrf_token', int $ttl = 3600):string {
-    $token = self::generateCSRF($form, $ttl);
-    return "<input type=\"hidden\" name=\"{$name}\" value=\"{$token}\">";
+  /** @deprecated Inject a CsrfTokenManager and call issue() directly. */
+  public static function generateCSRF(
+    string $form,
+    int $ttl = 3600,
+    ?CsrfTokenManager $csrf = null
+  ):string {
+    $manager = $csrf ?? self::$_legacyCsrf;
+    if ($manager === null) {
+      throw new \LogicException('A CSRF token manager must be explicitly configured.');
+    }
+    return $manager->issue($form, $ttl);
   }
 
-  // =========================================================================
-  // Private Methods
-  // =========================================================================
+  /** @deprecated Prefer the view layer or php-session's escaped csrfField(). */
+  public static function csrfField(
+    string $form,
+    string $name = 'csrf_token',
+    int $ttl = 3600,
+    ?CsrfTokenManager $csrf = null
+  ):string {
+    $token = self::generateCSRF($form, $ttl, $csrf);
+    return '<input type="hidden" name="'
+      . \htmlspecialchars($name, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+      . '" value="'
+      . \htmlspecialchars($token, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+      . '">';
+  }
 
-  /**
-   * Get JSON input from request body.
-   */
+  /** @return array<string, mixed> */
   private function _getJsonInput():array {
     $json = \file_get_contents('php://input');
-
-    if (empty($json)) {
+    if ($json === false || $json === '') {
       return [];
     }
 
-    $data = \json_decode($json, true);
-
-    return \is_array($data) ? $data : [];
-  }
-
-  /**
-   * Merge errors from Validator.
-   */
-  private function _mergeValidatorErrors(object $validator, string $type):void {
-    if (\class_exists('\TimeFrontiers\InstanceError')) {
-      $errors = (new \TimeFrontiers\InstanceError($validator, true))->get($type, true);
-
-      if (!empty($errors)) {
-        foreach ($errors as $err) {
-          $this->_userError('validate', $err);
-        }
-      }
-
-      // Clear validator errors
-      if (isset($validator->errors[$type])) {
-        unset($validator->errors[$type]);
-      }
+    try {
+      $data = \json_decode($json, true, 512, JSON_THROW_ON_ERROR);
+    } catch (\JsonException) {
+      $this->_userError('json', 'The request body contains malformed JSON.');
+      return [];
     }
+
+    if (!\is_array($data) || \array_is_list($data)) {
+      $this->_userError('json', 'The JSON request body must be an object.');
+      return [];
+    }
+    return $data;
   }
 }

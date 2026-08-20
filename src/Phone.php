@@ -431,22 +431,22 @@ class Phone {
   /**
    * Full structured breakdown of a phone number.
    *
-   * @return array|null [
-   *     'valid'       => bool,
-   *     'possible'    => bool,
-   *     'country'     => string|null,   // ISO alpha-2
-   *     'country_name'=> string|null,
-   *     'continent'   => string|null,
-   *     'dial_code'   => int|null,
-   *     'national'    => string|null,   // national-format string
-   *     'e164'        => string|null,
-   *     'intl'        => string|null,
-   *     'rfc3966'     => string|null,
-   *     'type'        => string|null,   // TYPE_* constant
-   *     'carrier'     => string|null,
-   *     'location'    => string|null,
-   *     'time_zones'  => array,
-   *   ]
+   * @return array{
+   *   valid: bool,
+   *   possible: bool,
+   *   country: string|null,
+   *   country_name: string|null,
+   *   continent: string|null,
+   *   dial_code: int|null,
+   *   national: string|null,
+   *   e164: string|null,
+   *   intl: string|null,
+   *   rfc3966: string|null,
+   *   type: string|null,
+   *   carrier: string|null,
+   *   location: string|null,
+   *   time_zones: list<string>
+   * }|null
    *   Returns null only if the number could not be parsed at all.
    */
   public static function parse(string $phone, ?string $region = null, string $locale = 'en'):?array {
@@ -473,7 +473,7 @@ class Phone {
       'type'         => self::type($phone, $region),
       'carrier'      => self::carrier($phone, $locale, $region),
       'location'     => self::location($phone, $locale, $region),
-      'time_zones'   => self::timeZones($phone, $region) ?? [],
+      'time_zones'   => \array_values(self::timeZones($phone, $region) ?? []),
     ];
   }
 

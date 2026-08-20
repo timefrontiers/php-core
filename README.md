@@ -14,7 +14,9 @@ composer require timefrontiers/php-core
 ## Requirements
 
 - PHP 8.5+
-- ext-curl (for URL utilities)
+- ext-curl, ext-json, ext-libxml, and ext-simplexml
+- `timefrontiers/php-has-errors` ^1.0
+- `timefrontiers/php-validator` ^1.1.1
 - `giggsey/libphonenumber-for-php` ^8.13 (for `Phone` utilities — installed automatically)
 
 ## Package Contents
@@ -153,6 +155,8 @@ $status = HttpStatus::fromCode(500);
 ```php
 use TimeFrontiers\Http\Http;
 use TimeFrontiers\Http\HttpStatus;
+use TimeFrontiers\Http\OriginPolicy;
+use TimeFrontiers\Http\TrustedProxyConfig;
 
 // Redirect (exits)
 Http::redirect('/dashboard');
@@ -162,7 +166,7 @@ Http::redirect('/login', HttpStatus::SEE_OTHER);
 Http::json(['user' => $user]);
 Http::success($data, 'User created');
 Http::error('Validation failed', HttpStatus::BAD_REQUEST, $errors);
-Http::jsonp($data, 'myCallback');              // JSONP (callback-wrapped JSON)
+Http::jsonp($data, 'myCallback');              // Deprecated compatibility API
 
 // Build a response body without sending it (middleware / controller returns)
 $body = Http::buildResponse(
@@ -172,10 +176,16 @@ $body = Http::buildResponse(
   meta: ['request_id' => $id]
 );
 
-// Request info
+// Direct request info (forwarding headers are ignored)
 $ip = Http::clientIp();
 $method = Http::method();
 $url = Http::currentUrl();
+
+// Host-owned proxy and origin trust
+$proxies = new TrustedProxyConfig(['10.0.0.0/8']);
+$origin = new OriginPolicy('https://app.example.com', ['tenant.example.com']);
+$ip = Http::clientIp($proxies);
+$url = Http::currentUrl($origin, $proxies);
 
 // Check request type
 Http::isMethod('POST');
@@ -201,6 +211,7 @@ Http::noCache();
 
 ```php
 use TimeFrontiers\Http\Request;
+use TimeFrontiers\Http\SessionCsrfAdapter;
 
 // Create from different sources
 $request = Request::fromPost();
@@ -217,7 +228,7 @@ $request->has('email'); // true/false
 $allowed = $request->only(['name', 'email', 'phone']);
 $filtered = $request->except(['password', 'token']);
 
-// Validate parameters
+// Validate parameters. Validation happens before normalization/coercion.
 $columns = [
   'email' => ['Email', 'email'],
   'name' => ['Name', 'text', 2, 100],
@@ -226,21 +237,29 @@ $columns = [
 
 $required = ['email', 'name'];
 
-$params = $request->validate($columns, $required);
+$result = $request->validateResult($columns, $required);
 
-if ($params === false) {
-  $errors = $request->getErrors();
+if ($result->fails()) {
+  $errors = $result->errors();
 }
+$params = $result->validated();
 
-// CSRF protection
-Request::csrfField('contact_form'); // Returns HTML input
+// CSRF belongs to php-session. Core receives an explicit adapter.
+$csrf = new SessionCsrfAdapter($session);
+$request = Request::fromPost($csrf);
+$token = $csrf->issue('contact_form');
 
 // In form handler:
 $token = $request->get('csrf_token');
-if (!$request->verifyCSRF('contact_form', $token)) {
+if (!is_string($token) || !$request->verifyCSRF('contact_form', $token)) {
   $errors = $request->getErrors();
 }
 ```
+
+`verifyCSRF()` never infers login state and never reads globals. Verification
+fails when no adapter is present. The `generateCSRF()` and `csrfField()` static
+helpers remain deprecated compatibility adapters and also require an explicitly
+supplied/configured manager.
 
 ---
 
@@ -258,7 +277,10 @@ $client = new Client('https://api.example.com');
 $client = Client::create()
   ->setBaseUrl('https://api.example.com')
   ->setHeaders(['Authorization' => 'Bearer token'])
+  ->setConnectTimeout(5)
   ->setTimeout(30)
+  ->setResponseLimits(64 * 1024, 2 * 1024 * 1024)
+  ->allowCrossOriginHeaders(['X-Trace-Id']) // explicit nonstandard opt-in
   ->verifySsl(true);
 
 // GET request
@@ -290,10 +312,33 @@ $response->isSuccess();     // true if 2xx
 $response->isError();       // true if 4xx or 5xx
 $response->isJson();        // true if JSON content type
 $response->body();          // raw body string
-$response->json();          // decoded JSON
+$response->json();          // decoded JSON; throws JsonException if malformed
 $response->header('Content-Type');
 $response->throwIfError();  // throws on error
 ```
+
+The default client accepts only HTTP(S), resolves every hop, rejects multicast
+and every IANA special-purpose/non-global address class, and pins approved DNS
+answers for the transport hop. Redirects are handled manually so every
+destination is revalidated. A single monotonic total deadline covers DNS and
+all redirect hops; synchronous platform DNS cannot be interrupted mid-call,
+but its elapsed time is charged and transport is skipped when it exhausts the
+budget.
+
+Cross-origin redirects retain only a small standard content-negotiation
+allowlist. Authorization, cookies, AWS session tokens, API keys, client
+secrets, and caller-defined headers are removed by default. A caller-owned
+nonstandard field requires explicit `allowCrossOriginHeaders()` opt-in.
+Non-idempotent bodies are not replayed unless
+`allowNonIdempotentRedirects()` is explicitly enabled.
+
+Trusted server-side callers that deliberately need an internal destination can
+inject `UrlPolicy::trusted()`. This is the low-level opt-out; the default policy
+must be used for request-derived URLs. `ClientResponse::toArray()` is a safe
+metadata projection. Use `toDebugArray()` only in trusted diagnostics because
+it includes the body, headers, and transport context. `ClientResponse::xml()`
+accepts UTF-8 only (with an optional UTF-8 BOM) and rejects DTD/entity-bearing,
+malformed, unsupported-encoding, and oversized documents.
 
 ---
 
@@ -321,8 +366,11 @@ Header::unauthorized();
 Header::forbidden();
 Header::internalError();
 
-// Error pages with redirect to /app/{code}
+// Error pages redirect to the relative /app/{code} path by default
 Header::notFound(redirect: true, message: 'Page not found');
+
+// Configure a canonical origin if absolute error redirects are required
+Header::configureErrorOrigin(new OriginPolicy('https://app.example.com'));
 
 // Authentication
 Header::authDialog('Admin Area', 'Access denied');
@@ -418,6 +466,7 @@ Time::toIso('2024-01-15');        // ISO 8601 format
 
 ```php
 use TimeFrontiers\Url;
+use TimeFrontiers\Http\UrlPolicy;
 
 // Add/update query parameters
 $url = Url::withParams('/search', ['q' => 'test', 'page' => 2]);
@@ -432,9 +481,12 @@ $query = Url::getParam($url, 'q');       // "test"
 $params = Url::getParams($url);          // ['q' => 'test']
 
 // Check URL status
-Url::exists('https://example.com');      // true/false (200 only)
+Url::exists('https://example.com');      // true/false (200 only, safe network policy)
 Url::isAccessible('https://example.com'); // true/false (2xx/3xx)
 $code = Url::getStatusCode('https://example.com');
+
+// Explicit internal-network opt-out for a trusted server-owned URL
+$code = Url::getStatusCode('http://service.internal/health', 10, UrlPolicy::trusted());
 
 // Parse and build
 $parts = Url::parse('https://user:pass@example.com:8080/path?q=1#hash');
@@ -618,6 +670,24 @@ Phone::normalize('0803.123.4567');          // "08031234567"
 ```
 
 ---
+
+## Development gate
+
+Because Core now declares its existing HasErrors use directly while released
+`php-has-errors 1.0.0` still requires Core, this package checkout must advertise
+the candidate version when Composer solves development dependencies:
+
+```bash
+COMPOSER_ROOT_VERSION=1.1.0 composer update
+composer check
+composer validate --strict
+composer audit --locked
+composer dump-autoload --optimize --strict-psr
+```
+
+The CI workflow sets `COMPOSER_ROOT_VERSION` itself. A normal consuming project
+does not need this environment variable; Composer resolves the two released
+packages together.
 
 ## License
 

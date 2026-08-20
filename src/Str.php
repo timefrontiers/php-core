@@ -13,7 +13,7 @@ class Str {
    * Parse "Name <email>" format into components.
    *
    * @param string $string Input like "John Doe <john@example.com>"
-   * @return array ['name' => '', 'surname' => '', 'email' => '']
+   * @return array{name: string, surname: string, email: string}
    */
   public static function parseEmailName(string $string):array {
     $result = [
@@ -33,7 +33,7 @@ class Str {
       );
 
       if (!empty($name)) {
-        $name_parts = \preg_split('/\s+/', $name, 2);
+        $name_parts = \preg_split('/\s+/', $name, 2) ?: [$name];
         $result['name'] = \str_replace(' ', '', \ucwords($name_parts[0]));
 
         if (\count($name_parts) > 1) {
@@ -41,11 +41,15 @@ class Str {
         }
       }
 
-      $result['email'] = \filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : '';
+      $result['email'] = \is_string($email) && \filter_var($email, FILTER_VALIDATE_EMAIL)
+        ? $email
+        : '';
     } else {
       // Just email
       $email = \filter_var($string, FILTER_SANITIZE_EMAIL);
-      $result['email'] = \filter_var($email, FILTER_VALIDATE_EMAIL) ? $email : '';
+      $result['email'] = \is_string($email) && \filter_var($email, FILTER_VALIDATE_EMAIL)
+        ? $email
+        : '';
     }
 
     return $result;
@@ -70,8 +74,8 @@ class Str {
   /**
    * Pattern-based string replacement.
    *
-   * @param array $patterns [key => pattern] pairs
-   * @param array $replacements [key => replacement] pairs
+   * @param array<array-key, string|array<string>> $patterns [key => pattern] pairs
+   * @param array<array-key, string|array<string>> $replacements [key => replacement] pairs
    * @param string $value String to process
    * @return string Processed string
    */
@@ -121,7 +125,7 @@ class Str {
     $text = \strtolower($text);
 
     // Replace non-alphanumeric characters with separator
-    $text = \preg_replace('/[^a-z0-9]+/', $separator, $text);
+    $text = \preg_replace('/[^a-z0-9]+/', $separator, $text) ?? $text;
 
     // Remove leading/trailing separators
     return \trim($text, $separator);
@@ -175,7 +179,7 @@ class Str {
    * @return string Limited string
    */
   public static function limitWords(string $text, int $words, string $suffix = '...'):string {
-    $arr = \preg_split('/\s+/', $text, $words + 1);
+    $arr = \preg_split('/\s+/', $text, $words + 1) ?: [];
 
     if (\count($arr) <= $words) {
       return $text;
@@ -211,7 +215,7 @@ class Str {
    */
   public static function toSnakeCase(string $text):string {
     // Add underscore before capitals
-    $text = \preg_replace('/([a-z])([A-Z])/', '$1_$2', $text);
+    $text = \preg_replace('/([a-z])([A-Z])/', '$1_$2', $text) ?? $text;
 
     // Replace spaces and dashes
     $text = \str_replace([' ', '-'], '_', $text);
@@ -224,7 +228,7 @@ class Str {
    */
   public static function toKebabCase(string $text):string {
     // Add dash before capitals
-    $text = \preg_replace('/([a-z])([A-Z])/', '$1-$2', $text);
+    $text = \preg_replace('/([a-z])([A-Z])/', '$1-$2', $text) ?? $text;
 
     // Replace spaces and underscores
     $text = \str_replace([' ', '_'], '-', $text);
@@ -311,7 +315,7 @@ class Str {
    */
   public static function excerpt(string $text, int $length = 200, string $suffix = '...'):string {
     $text = \strip_tags($text);
-    $text = \preg_replace('/\s+/', ' ', $text);
+    $text = \preg_replace('/\s+/', ' ', $text) ?? $text;
     $text = \trim($text);
 
     return self::truncateWords($text, $length, $suffix);
